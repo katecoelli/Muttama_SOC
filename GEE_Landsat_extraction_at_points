@@ -1,0 +1,86 @@
+
+//broad dates of interest
+//Select dates that encompass all sampling dates
+var start = ee.Date('2008-06-01');
+var finish = ee.Date('2019-06-30');
+
+//Place of interest
+var Mutt = boundary
+
+//Cloud mask function
+/**
+ * Function to mask clouds based on the pixel_qa band of Landsat SR data.
+ * @param {ee.Image} image Input Landsat SR image
+ * @return {ee.Image} Cloudmasked Landsat image
+ */
+var cloudMaskL457 = function(image) {
+  var qa = image.select('pixel_qa');
+  // If the cloud bit (5) is set and the cloud confidence (7) is high
+  // or the cloud shadow bit is set (3), then it's a bad pixel.
+  var cloud = qa.bitwiseAnd(1 << 5)
+                  .and(qa.bitwiseAnd(1 << 7))
+                  .or(qa.bitwiseAnd(1 << 3));
+  // Remove edge pixels that don't occur in all bands
+  var mask2 = image.mask().reduce(ee.Reducer.min());
+  return image.updateMask(cloud.not()).updateMask(mask2);
+};
+
+
+//Create image collection filtered by date, area and masked for clouds
+var dataset = Landsat7
+                  .filterDate(start, finish)
+                  .filterBounds(Mutt)
+                  .map(cloudMaskL457);
+
+// calculate NDVI - need a function to loop through image collection()
+var addNDVI = function(image){
+  var ndvi = image.normalizedDifference(['B4', 'B3']).rename('NDVI');
+  return image.addBands(ndvi)
+}
+
+var addEVI = function(image) {
+ var evi = image.expression(
+    '2.5 * ((NIR*0.0001 - RED*0.0001) / (NIR*0.0001 + 6 * RED*0.0001 - 7.5 * BLUE*0.0001 + 1))', {
+      'NIR': image.select('B4'),
+      'RED': image.select('B3'),
+      'BLUE': image.select('B1')
+}).rename('EVI')
+  return image.addBands(evi)
+}
+
+
+
+//add the calculated vegetation indices to the existing image collection
+var withVI = dataset
+        .map(addNDVI)
+        .map(addEVI);
+
+
+print(withVI.select('EVI'));
+
+//extracts all the relevant bands, writes them as a number and adds them to FeatureCollection
+var dateSampling = function(ftr){//creates a function for the FeatureCollection(table of sample points)
+  var currentDate = ee.Date(ftr.get('Date'))//gets the date for a given observation in the FeatureCollection
+  var tmpImageCollection = withVI.filterDate(currentDate.advance(-5,'year'),currentDate)//creates ImageCollection of 5 years prior to sampling time
+  
+  var min_ = ee.Number(ee.Dictionary(tmpImageCollection.min().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('B3'))
+  var mean_ = ee.Number(ee.Dictionary(tmpImageCollection.mean().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('B3'))
+  var max_ = ee.Number(ee.Dictionary(tmpImageCollection.max().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('B3'))
+  var max_NDVI = ee.Number(ee.Dictionary(tmpImageCollection.max().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('NDVI'))
+  var min_NDVI = ee.Number(ee.Dictionary(tmpImageCollection.min().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('NDVI'))
+  var max_EVI = ee.Number(ee.Dictionary(tmpImageCollection.max().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('EVI'))
+  var min_EVI = ee.Number(ee.Dictionary(tmpImageCollection.min().reduceRegion({reducer:ee.Reducer.first(), geometry:ftr.geometry(),scale:30})).get('EVI'))
+  
+  return(ftr.set('red_min',min_).set('red_mean',mean_).set('red_max',max_).set('NDVI_max', max_NDVI).set('NDVI_min', min_NDVI).set('EVI_max', max_EVI).set('EVI_min', min_EVI))
+  
+  }
+ 
+var result_ = table.map(dateSampling) 
+print(result_) 
+
+
+Export.table.toDrive({
+  collection :result_,
+  description :'Landsat7',
+  fileFormat: 'CSV'}
+  );
