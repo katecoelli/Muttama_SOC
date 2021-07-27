@@ -1,8 +1,8 @@
 
 //broad dates of interest
 //Select dates that encompass all sampling dates
-var start = ee.Date('2008-06-01');
-var finish = ee.Date('2019-06-30');
+var start = ee.Date('1600-06-01');
+var finish = ee.Date('1650-06-30');
 
 //Place of interest
 var Mutt = boundary
